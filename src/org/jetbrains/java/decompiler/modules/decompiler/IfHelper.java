@@ -4,27 +4,36 @@ package org.jetbrains.java.decompiler.modules.decompiler;
 import org.jetbrains.java.decompiler.main.DecompilerContext;
 import org.jetbrains.java.decompiler.main.extern.IFernflowerPreferences;
 import org.jetbrains.java.decompiler.modules.decompiler.IfNode.EdgeType;
+import org.jetbrains.java.decompiler.modules.decompiler.exps.ExitExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.Exprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.FunctionExprent.FunctionType;
 import org.jetbrains.java.decompiler.modules.decompiler.exps.IfExprent;
+import org.jetbrains.java.decompiler.modules.decompiler.stats.BasicBlockStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.RootStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.SequenceStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
+import org.jetbrains.java.decompiler.struct.StructMethod;
+import org.jetbrains.java.decompiler.struct.attr.StructGeneralAttribute;
+import org.jetbrains.java.decompiler.struct.attr.StructLineNumberTableAttribute;
+import org.jetbrains.java.decompiler.struct.gen.CodeType;
+import org.jetbrains.java.decompiler.struct.gen.VarType;
+import org.jetbrains.java.decompiler.util.MutableBoolean;
+import org.jetbrains.java.decompiler.util.ThreeState;
 
 import java.util.*;
 
 public final class IfHelper {
   public static boolean mergeAllIfs(RootStatement root) {
-    boolean res = mergeAllIfsRec(root, new HashSet<>());
+    boolean res = mergeAllIfsRec(root, root.mt, new HashSet<>());
     if (res) {
       SequenceHelper.condenseSequences(root);
     }
     return res;
   }
 
-  private static boolean mergeAllIfsRec(Statement stat, Set<? super Integer> setReorderedIfs) {
+  private static boolean mergeAllIfsRec(Statement stat, StructMethod mt, Set<? super Integer> setReorderedIfs) {
     boolean res = false;
 
     if (stat.getExprents() == null) {
@@ -32,10 +41,10 @@ public final class IfHelper {
         boolean changed = false;
 
         for (Statement st : stat.getStats()) {
-          res |= mergeAllIfsRec(st, setReorderedIfs);
+          res |= mergeAllIfsRec(st, mt, setReorderedIfs);
 
           // collapse composed if's
-          if (mergeIfs(st, setReorderedIfs)) {
+          if (mergeIfs(st, mt, setReorderedIfs)) {
             changed = true;
             break;
           }
@@ -52,7 +61,7 @@ public final class IfHelper {
     return res;
   }
 
-  public static boolean mergeIfs(Statement statement, Set<? super Integer> setReorderedIfs) {
+  public static boolean mergeIfs(Statement statement, StructMethod mt, Set<? super Integer> setReorderedIfs) {
     if (!(statement instanceof IfStatement) && !(statement instanceof SequenceStatement)) {
       return false;
     }
@@ -100,14 +109,14 @@ public final class IfHelper {
             }
 
             // TODO: This should maybe be moved (probably to reorderIf)
-            if (ifElseChainDenesting(rtnode)) {
+            if (ifElseChainDenesting(rtnode, mt)) {
               res = true;
               ValidationHelper.validateStatement(stat.getTopParent());
               continue loop;
             }
           }
 
-          if (reorderIf((IfStatement) stat)) {
+          if (reorderIf(rtnode, mt)) {
             res = true;
             ValidationHelper.validateStatement(stat.getTopParent());
             setReorderedIfs.add(stat.id);
@@ -386,9 +395,7 @@ public final class IfHelper {
           firstif.getParent().getStats().removeWithKey(second.id);
 
           // negate the if condition
-          IfExprent statexpr = firstif.getHeadexprent();
-          statexpr
-            .setCondition(new FunctionExprent(FunctionType.BOOL_NOT, statexpr.getCondition(), null));
+          firstif.getHeadexprent().negateIf();
 
           return true;
         }
@@ -540,7 +547,7 @@ public final class IfHelper {
   // }
   //
   // (Which is rendered as if/elseif/else)
-  private static boolean ifElseChainDenesting(IfNode rtnode) {
+  private static boolean ifElseChainDenesting(IfNode rtnode, StructMethod mt) {
     if (rtnode.innerType == EdgeType.DIRECT && rtnode.successorType != EdgeType.ELSE) {
       IfStatement outerIf = (IfStatement) rtnode.value;
       if (outerIf.getParent() instanceof SequenceStatement) {
@@ -561,11 +568,12 @@ public final class IfHelper {
             IfStatement nextIfStat = nextStat == null ? null : nextStat instanceof IfStatement ? (IfStatement) nextStat
               : nextStat instanceof SequenceStatement && nextStat.getFirst() instanceof IfStatement ? (IfStatement) nextStat.getFirst() : null;
             if (nextStat != null && (nextIfStat == null || !nextIfStat.getFirst().getExprents().isEmpty())) {
-              // negate the condition and swap the branches
-              IfExprent conditionExprent = outerIf.getHeadexprent();
-              conditionExprent.setCondition(new FunctionExprent(FunctionType.BOOL_NOT, conditionExprent.getCondition(), null));
-              swapBranches(outerIf, false, parent);
-              return true;
+              if (shouldSwapBranches(rtnode, mt) != ThreeState.FALSE) {
+                // negate the condition and swap the branches
+                outerIf.getHeadexprent().negateIf();
+                swapBranches(outerIf, false, parent);
+                return true;
+              }
             }
           }
         }
@@ -576,9 +584,10 @@ public final class IfHelper {
   }
 
   // FIXME: rewrite the entire method!!! keep in mind finally exits!!
-  private static boolean reorderIf(IfStatement ifstat) {
+  private static boolean reorderIf(IfNode rtnode, StructMethod mt) {
+    IfStatement ifstat = (IfStatement) rtnode.value;
     if (ifstat.iftype == IfStatement.IFTYPE_IFELSE) {
-      return false;
+      return reorderIfElse(rtnode, mt);
     }
 
     boolean ifdirect, elsedirect;
@@ -636,7 +645,7 @@ public final class IfHelper {
       }
     }
 
-    if ((ifdirect || ifdirectpath) && (elsedirect || elsedirectpath) && !noifstat && !noelsestat) {  // if - then - else
+    if ((ifdirect || ifdirectpath) && (elsedirect || elsedirectpath) && !noifstat && !noelsestat && !isGuardClause(rtnode)) {  // if - then - else
 
       SequenceStatement sequence = (SequenceStatement) parent;
 
@@ -681,8 +690,7 @@ public final class IfHelper {
       ifstat.iftype = IfStatement.IFTYPE_IFELSE;
     } else if (ifdirect && (!elsedirect || (noifstat && !noelsestat)) && !ifstat.getAllSuccessorEdges().isEmpty()) {  // if - then
       // negate the if condition
-      IfExprent statexpr = ifstat.getHeadexprent();
-      statexpr.setCondition(new FunctionExprent(FunctionType.BOOL_NOT, statexpr.getCondition(), null));
+      ifstat.getHeadexprent().negateIf();
 
       if (noelsestat) {
         StatEdge ifedge = ifstat.getIfEdge();
@@ -724,6 +732,36 @@ public final class IfHelper {
     } else {
       return false;
     }
+
+    return true;
+  }
+
+  private static boolean reorderIfElse(IfNode rtnode, StructMethod mt) {
+    IfStatement ifstat = (IfStatement) rtnode.value;
+    if (ifstat.getIfstat() == null || ifstat.getElsestat() == null) {
+      return false;
+    }
+
+    ThreeState shouldSwap = shouldSwapBranches(rtnode, mt);
+    if (shouldSwap == ThreeState.UNSURE) {
+      shouldSwap = shouldSwapBranchesToPutGuardClauseFirst(rtnode);
+    }
+    if (shouldSwap != ThreeState.TRUE) {
+      return false;
+    }
+
+    ifstat.getHeadexprent().negateIf();
+    Statement elsestat = ifstat.getElsestat();
+    ifstat.setElsestat(ifstat.getIfstat());
+    ifstat.setIfstat(elsestat);
+    StatEdge ifEdge = ifstat.getIfEdge();
+    StatEdge elseEdge = ifstat.getElseEdge();
+    ifstat.setIfEdge(elseEdge);
+    ifstat.setElseEdge(ifEdge);
+    ifstat.getStats().set(1, ifstat.getIfstat());
+    ifstat.getStats().set(2, ifstat.getElsestat());
+    ifstat.getFirst().removeSuccessor(ifEdge);
+    ifstat.getFirst().addSuccessor(ifEdge);
 
     return true;
   }
@@ -851,5 +889,169 @@ public final class IfHelper {
     }
 
     return false;
+  }
+
+  private static ThreeState shouldSwapBranches(IfNode rtnode, StructMethod mt) {
+    IfStatement ifStatement = (IfStatement) rtnode.value;
+
+    // use line numbers from inside the if/else
+    if (DecompilerContext.getOption(IFernflowerPreferences.LINE_NUMBER_HEURISTICS)) {
+      StructLineNumberTableAttribute lineNumberTable = mt.getAttribute(StructGeneralAttribute.ATTRIBUTE_LINE_NUMBER_TABLE);
+      if (lineNumberTable != null) {
+        int ifLine = lineNumberTable.findLineNumber(rtnode.innerNode.value.getStartEndRange().start);
+        int elseLine = lineNumberTable.findLineNumber(rtnode.successorNode.value.getStartEndRange().start);
+        if (ifLine != -1 && elseLine != -1) {
+          if (ifLine < elseLine) {
+            return ThreeState.FALSE;
+          } else if (elseLine < ifLine) {
+            return ThreeState.TRUE;
+          }
+        }
+      }
+    }
+
+    // use float inequalities.
+    // for example, the proper inverse of `a < b` is `!(a < b)` because of NaN, but most programmers would write `a >= b`
+    // in the source code because they're not expecting NaN values. Take advantage of this to infer which way round the
+    // if/else goes.
+    Exprent condition = ifStatement.getHeadexprent().getCondition();
+    boolean negated = ifStatement.isNegated();
+    while (condition instanceof FunctionExprent && ((FunctionExprent) condition).getFuncType() == FunctionExprent.FunctionType.BOOL_NOT) {
+      negated = !negated;
+      condition = ((FunctionExprent) condition).getLstOperands().get(0);
+    }
+    if (condition instanceof FunctionExprent) {
+      FunctionExprent func = (FunctionExprent) condition;
+      FunctionExprent.FunctionType funcType = func.getFuncType();
+      if (funcType == FunctionExprent.FunctionType.LT
+        || funcType == FunctionExprent.FunctionType.GE
+        || funcType == FunctionExprent.FunctionType.GT
+        || funcType == FunctionExprent.FunctionType.LE) {
+        VarType left = func.getLstOperands().get(0).getExprType();
+        VarType right = func.getLstOperands().get(1).getExprType();
+        VarType commonSupertype = VarType.getCommonSupertype(left, right);
+        if (commonSupertype != null) {
+          if (commonSupertype.type == CodeType.FLOAT || commonSupertype.type == CodeType.DOUBLE) {
+            return negated ? ThreeState.TRUE : ThreeState.FALSE;
+          }
+        }
+      }
+    }
+
+    return ThreeState.UNSURE;
+  }
+
+  private static boolean isGuardClause(IfNode rtnode) {
+    return shouldSwapBranchesToPutGuardClauseFirst(rtnode) == ThreeState.FALSE;
+  }
+
+  private static ThreeState shouldSwapBranchesToPutGuardClauseFirst(IfNode rtnode) {
+    boolean hasElse = rtnode.successorType == EdgeType.ELSE || rtnode.innerNode.successorNode == null || rtnode.innerNode.successorNode.value != rtnode.successorNode.value;
+    // if one branch ends with a throw statement and the other doesn't, it might be a guard clause
+    Exprent ifLastExprent = getLastExprent(rtnode.innerNode.value);
+    Exprent elseLastExprent = getLastExprent(rtnode.successorNode.value);
+    boolean ifThrow = ifLastExprent instanceof ExitExprent && ((ExitExprent) ifLastExprent).getExitType() == ExitExprent.Type.THROW;
+    boolean elseThrow = elseLastExprent instanceof ExitExprent && ((ExitExprent) elseLastExprent).getExitType() == ExitExprent.Type.THROW;
+    if (ifThrow && !elseThrow) {
+      MutableBoolean allThrow = new MutableBoolean(true);
+      iterateElseIfChain(rtnode, (edgeType, node) -> {
+        Exprent elseIfLastExprent = getLastExprent(node.value);
+        boolean elseIfThrow = elseIfLastExprent instanceof ExitExprent && ((ExitExprent) elseIfLastExprent).getExitType() == ExitExprent.Type.THROW;
+        if (!elseIfThrow) {
+          allThrow.setValue(false);
+          return false;
+        }
+        return true;
+      });
+      if (!allThrow.getValue()) {
+        return ThreeState.FALSE;
+      }
+    } else if (!ifThrow && elseThrow && hasElse) {
+      return ThreeState.TRUE;
+    }
+
+    // if one branch is only a return statement and the other isn't, it might be a guard clause
+    boolean ifReturn = isLoneReturn(rtnode.innerNode.value);
+    boolean elseReturn = isLoneReturn(rtnode.successorNode.value);
+    if (ifReturn && !elseReturn) {
+      MutableBoolean allReturn = new MutableBoolean(true);
+      iterateElseIfChain(rtnode, (edgeType, node) -> {
+        boolean elseIfReturn = isLoneReturn(node.value);
+        if (!elseIfReturn) {
+          allReturn.setValue(false);
+          return false;
+        }
+        return true;
+      });
+      if (!allReturn.getValue()) {
+        return ThreeState.FALSE;
+      }
+    } else if (!ifReturn && elseReturn && hasElse) {
+      return ThreeState.TRUE;
+    }
+
+    // TODO: other guard clause heuristics (return without argument, break and continue)
+
+    return ThreeState.UNSURE;
+  }
+
+  private static void iterateElseIfChain(IfNode node, ElseIfChainConsumer branchConsumer) {
+    while (true) {
+      if (!branchConsumer.accept(node.innerType, node.innerNode)) {
+        return;
+      }
+
+      // check we have an else branch
+      if (node.successorType != EdgeType.ELSE && node.innerNode.successorNode != null && node.innerNode.successorNode.value == node.successorNode.value) {
+        return;
+      }
+
+      // check if we have an else if
+      Statement elseStat = node.successorNode.value;
+      IfStatement elseIf = null;
+      if (elseStat instanceof IfStatement) {
+        elseIf = (IfStatement) elseStat;
+      } else if (elseStat instanceof SequenceStatement && elseStat.getStats().size() == 1) {
+        Statement childStat = elseStat.getFirst();
+        if (childStat instanceof IfStatement) {
+          elseIf = (IfStatement) childStat;
+        }
+      }
+      if (elseIf != null && elseIf.getExprents() != null && !elseIf.getExprents().isEmpty()) {
+        elseIf = null;
+      }
+      if (elseIf == null) {
+        branchConsumer.accept(node.successorType, node.successorNode);
+        return;
+      }
+
+      node = IfNode.build(elseIf, true);
+    }
+  }
+
+  @FunctionalInterface
+  private interface ElseIfChainConsumer {
+    // return true to continue iterating, false to stop iterating
+    boolean accept(EdgeType edgeType, IfNode node);
+  }
+
+  private static Exprent getLastExprent(Statement statement) {
+    if (statement instanceof SequenceStatement) {
+      if (!statement.getStats().isEmpty()) {
+        return getLastExprent(statement.getStats().getLast());
+      }
+    }
+    if (statement instanceof SequenceStatement || statement instanceof BasicBlockStatement) {
+      return statement.getExprents().isEmpty() ? null : statement.getExprents().get(statement.getExprents().size() - 1);
+    }
+    return null;
+  }
+
+  private static boolean isLoneReturn(Statement statement) {
+    if (!(statement instanceof BasicBlockStatement) || statement.getExprents().size() != 1) {
+      return false;
+    }
+    Exprent exprent = statement.getExprents().get(0);
+    return exprent instanceof ExitExprent && ((ExitExprent) exprent).getExitType() == ExitExprent.Type.RETURN;
   }
 }

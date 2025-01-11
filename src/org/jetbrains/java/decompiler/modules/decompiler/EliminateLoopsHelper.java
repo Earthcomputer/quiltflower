@@ -2,6 +2,7 @@
 package org.jetbrains.java.decompiler.modules.decompiler;
 
 import org.jetbrains.java.decompiler.modules.decompiler.stats.DoStatement;
+import org.jetbrains.java.decompiler.modules.decompiler.stats.RootStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
 import org.jetbrains.java.decompiler.struct.StructClass;
 
@@ -11,7 +12,7 @@ import java.util.stream.Collectors;
 
 public class EliminateLoopsHelper {
 
-  public static boolean eliminateLoops(Statement root, StructClass cl) {
+  public static boolean eliminateLoops(RootStatement root, StructClass cl) {
 
     boolean ret = eliminateLoopsRec(root);
 
@@ -21,7 +22,7 @@ public class EliminateLoopsHelper {
       Set<Integer> setReorderedIfs = new HashSet<>();
 
       // TODO: what problems does SSA being null cause?
-      while(SimplifyExprentsHelper.simplifyStackVarsStatement(root, setReorderedIfs, null, cl, false)) {
+      while(SimplifyExprentsHelper.simplifyStackVarsStatement(root, setReorderedIfs, null, cl, root.mt, false)) {
         SequenceHelper.condenseSequences(root);
       }
     }

@@ -397,6 +397,11 @@ public interface IFernflowerPreferences {
   @Type(DecompilerOption.Type.STRING)
   String VALIDATE_INNER_CLASSES_NAMES = "validate-inner-classes-names";
 
+  @Name("Line Number Heuristics")
+  @Description("Use line numbers to decide between equivalent decompilations")
+  @Type(DecompilerOption.Type.BOOLEAN)
+  String LINE_NUMBER_HEURISTICS = "line-number-heuristics";
+
   Map<String, Object> DEFAULTS = getDefaults();
 
   static Map<String, Object> getDefaults() {
@@ -470,6 +475,7 @@ public interface IFernflowerPreferences {
     defaults.put(MARK_CORRESPONDING_SYNTHETICS, "0");
     defaults.put(EXCLUDED_CLASSES, "");
     defaults.put(VALIDATE_INNER_CLASSES_NAMES, "1");
+    defaults.put(LINE_NUMBER_HEURISTICS, "1");
 
     return Collections.unmodifiableMap(defaults);
   }

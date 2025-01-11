@@ -51,7 +51,7 @@ public class StackVarsProcessor {
       SSAConstructorSparseEx ssa = new SSAConstructorSparseEx();
       ssa.splitVariables(root, mt);
 
-      while (SimplifyExprentsHelper.simplifyStackVarsStatement(root, setReorderedIfs, ssa, cl, first)) {
+      while (SimplifyExprentsHelper.simplifyStackVarsStatement(root, setReorderedIfs, ssa, cl, root.mt, first)) {
         ValidationHelper.validateStatement(root);
         found = true;
       }

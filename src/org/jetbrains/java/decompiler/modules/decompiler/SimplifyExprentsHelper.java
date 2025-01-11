@@ -14,6 +14,7 @@ import org.jetbrains.java.decompiler.modules.decompiler.stats.IfStatement;
 import org.jetbrains.java.decompiler.modules.decompiler.stats.Statement;
 import org.jetbrains.java.decompiler.modules.decompiler.vars.VarVersionPair;
 import org.jetbrains.java.decompiler.struct.StructClass;
+import org.jetbrains.java.decompiler.struct.StructMethod;
 import org.jetbrains.java.decompiler.struct.gen.CodeType;
 import org.jetbrains.java.decompiler.struct.gen.VarType;
 import org.jetbrains.java.decompiler.struct.match.MatchEngine;
@@ -56,6 +57,7 @@ public class SimplifyExprentsHelper {
     Set<Integer> setReorderedIfs,
     SSAConstructorSparseEx ssa,
     StructClass cl,
+    StructMethod mt,
     boolean firstInvocation
   ) {
     boolean res = false;
@@ -68,9 +70,9 @@ public class SimplifyExprentsHelper {
         boolean changed = false;
 
         for (Statement st : stat.getStats()) {
-          res |= simplifyStackVarsStatement(st, setReorderedIfs, ssa, cl, firstInvocation);
+          res |= simplifyStackVarsStatement(st, setReorderedIfs, ssa, cl, mt, firstInvocation);
 
-          changed = IfHelper.mergeIfs(st, setReorderedIfs) ||  // collapse composed if's
+          changed = IfHelper.mergeIfs(st, mt, setReorderedIfs) ||  // collapse composed if's
                     buildIff(st, ssa) ||  // collapse iff ?: statement
                     processClass14 && collapseInlinedClass14(st);  // collapse inlined .class property in version 1.4 and before
 

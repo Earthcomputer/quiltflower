@@ -177,7 +177,7 @@ public final class BasicBlockStatement extends Statement {
     if (block.size() > 0) {
       return new StartEndPair(block.getStartInstruction(), block.getEndInstruction());
     } else {
-      return new StartEndPair(0, 0);
+      return new StartEndPair(-1, -1);
     }
   }
 }
